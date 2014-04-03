@@ -1,4 +1,4 @@
-# $Id: ssl.py 84 2012-08-24 18:44:00Z andrewflnr@gmail.com $
+# Id: ssl.py 84 2012-08-24 18:44:00Z andrewflnr@gmail.com $
 # Portion Copyright 2012 Google Inc. All rights reserved.
 
 """Secure Sockets Layer / Transport Layer Security."""
@@ -9,6 +9,7 @@ import struct
 import binascii
 import traceback
 import datetime
+import OpenSSL
 
 #
 # Note from April 2011: cde...@gmail.com added code that parses SSL3/TLS messages more in depth.
@@ -270,11 +271,40 @@ class TLSServerHello(dpkt.Packet):
             # probably data too short
             raise dpkt.NeedData
 
+class TLSCertificate(dpkt.Packet):
+    __hdr__ = (
+        ('certs_len', '3s', 0),
+    )
+    def unpack(self, buf):
+        try:
+            dpkt.Packet.unpack(self, buf)
+            self.num_certs = 0
+            self.certs=[]
+            consumed = 0
+            while (consumed < self.certs_len):
+                cert_len = struct.unpack('!I', '\x00' + self.data[consumed:consumed+3])[0]
+                asn1cert = self.data[consumed+3:consumed+3+cert_len]
+                #print dpkt.hexdump(asn1cert)
+                #asn1cert = struct.unpack('<s', self.data[consumed+3:consumed+cert_len])
+                #print dpkt.hexdump(asn1cert)
+                #x509cert=OpenSSL.crypto.load_certificate(OpenSSL.crypto.FILETYPE_ASN1, asn1cert)
+                #self.certs.append(x509cert)
+                import M2Crypto
+                cert = M2Crypto.X509.load_cert_string(asn1cert, format=M2Crypto.X509.FORMAT_DER)
+                self.certs.append( cert )
+                consumed = consumed + 3 + cert_len
+                self.num_certs+=1      
+                print "Cert %d, %d" % (self.num_certs, cert_len)
+        except struct.error:
+            raise dpkt.NeedData
+    @property
+    def length(self):
+        return struct.unpack('!I', '\x00' + self.certs_len)[0]
 
 class TLSUnknownHandshake(dpkt.Packet):
     __hdr__ = tuple()
 
-TLSCertificate = TLSUnknownHandshake
+#TLSCertificate = TLSUnknownHandshake
 TLSServerKeyExchange = TLSUnknownHandshake
 TLSCertificateRequest = TLSUnknownHandshake
 TLSServerHelloDone = TLSUnknownHandshake

@@ -16,7 +16,6 @@
 #
 
 import os, sys
-import M2Crypto
 
 p = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'dpkt-1.8')
 if p not in sys.path:
@@ -24,130 +23,134 @@ if p not in sys.path:
 
 import dpkt
 
+
 def pcap_reader(fp):
-	return dpkt.pcap.Reader(fp)
+    return dpkt.pcap.Reader(fp)
 
 def extract_info(pcap):
-	"""
-	Precondition: pcap should have only one TCP stream containing a SSL session
-	Postcondition: it return the information about SSL session in an array
-	"""	
+    """
+    Precondition: pcap should have only one TCP stream containing a SSL session
+    Postcondition: it return the information about SSL session in an array
+    """    
 
-	msgord=[]
-	sslinfo = {'Version':0, 'C_SID': 'n', 'S_SID': 'n', \
-				'CipherSuite': 0x0000, 'Certs': [], 'Records': []} 
+    msgord=[]
+    sslinfo = {'Version':0, 'C_SID': 'n', 'S_SID': 'n', \
+                'CipherSuite': 0x0000, 'Certs': [], 'Records': []} 
 
-	for ts, frame in pcap:
-		eth = dpkt.ethernet.Ethernet(frame)
-		# ignore if not IP packet
-		if not isinstance(eth.data, dpkt.ip.IP):
-			continue
+    for ts, frame in pcap:
+        eth = dpkt.ethernet.Ethernet(frame)
+        # ignore if not IP packet
+        if not isinstance(eth.data, dpkt.ip.IP):
+            continue
 
-		# ignore if not TCP packet
-		ip = eth.data
-		if not isinstance(ip.data, dpkt.tcp.TCP):
-			continue
+        # ignore if not TCP packet
+        ip = eth.data
+        if not isinstance(ip.data, dpkt.tcp.TCP):
+            continue
 
-		# ignore if not SSL packet (only default 443)
-		tcp = ip.data
-		if tcp.dport != 443 and tcp.sport != 443:
-			continue
+        # ignore if not SSL packet (only default 443)
+        tcp = ip.data
+        if tcp.dport != 443 and tcp.sport != 443:
+            continue
 
-		if len(tcp.data) <= 0:
-			continue
+        if len(tcp.data) <= 0:
+            continue
 
-		#TLS_HANDSHAKE:
-		if ord(tcp.data[0]) != 22 and ord(tcp.data[0]) != 20 and ord(tcp.data[0]) != 21:
-			continue
+        #TLS_HANDSHAKE:
+        if ord(tcp.data[0]) != 22 and ord(tcp.data[0]) != 20 and ord(tcp.data[0]) != 21:
+            continue
 
-		records = []
-		try:
-			records, bytes_used = dpkt.ssl.TLSMultiFactory(tcp.data)
-		except dpkt.ssl.SSL3Exception, e:
-			continue
-		except dpkt.dpkt.NeedData, e:
-			continue
+        records = []
+        try:
+            records, bytes_used = dpkt.ssl.TLSMultiFactory(tcp.data)
+        except dpkt.ssl.SSL3Exception, e:
+            continue
+        except dpkt.dpkt.NeedData, e:
+            continue
 
-		if len(records) <= 0:
-			continue
+        if len(records) <= 0:
+            continue
 
-		for record in records:
+        for record in records:
 
-			if record.type == 20 or record.type == 21:
-				msgord.append(record.type)
-				msgord.append(0)
-				continue
-			
-			# We mainly focus on TLSHandshake
-			if record.type != 22:
-				continue;	
+            if record.type == 20 or record.type == 21:
+                msgord.append(record.type)
+                msgord.append(0)
+                continue
+            
+            # We mainly focus on TLSHandshake
+            if record.type != 22:
+                print "Record: %d" % record.type
+                continue;    
 
-			if len(record.data) == 0:
-				continue
+            if len(record.data) == 0:
+                continue
 
-			try:
-				handshake = dpkt.ssl.TLSHandshake(record.data)
-			except dpkt.ssl.SSL3Exception, e:
-				continue
-			except dpkt.dpkt.NeedData, e:
-				continue
+            hdtype = ord(record.data[0])
 
-			hdtype = ord(record.data[0])
-			hd = handshake.data
+            msgord.append(record.type)
+            msgord.append(hdtype)
 
-			msgord.append(record.type)
-			msgord.append(hdtype)
-			#print "Handshake Protocol: 0x%02x 0x%02x" % (record.type, hdtype)
-			if hdtype == 1:
-				#if not isinstance(hd, dpkt.ssl.TLSClientHello):
-				#	continue
-				# Use version from client Hello for now
-				sslinfo['Version'] = '%04x' % record.version	
-				if  len(hd.session_id) > 0:
-					sslinfo['C_SID'] = 'y'
-			elif hdtype == 2: 
-				#if not isinstance(hd, dpkt.ssl.TLSServerHello):
-				#	continue
-				if  len(hd.session_id) > 0:
-					sslinfo['S_SID'] = 'y'
-				sslinfo['CipherSuite'] = ('%04x' % hd.cipher_suite)
-			elif hdtype == 11: 
-				#if not isinstance(hd, dpkt.ssl.TLSCertificate):
-				#	continue
-				#m2cert = M2Crypto.X509.load_cert_der_string(hd.data)
-				#pkey = m2cert.get_pubkey()
-				#print dpkt.hex2dump(pkey, 256)
-				#print m2cert.as_text()
-				pass
-			else:	
-				#print "Unknown Handshake Protocol: %d" % hdtype
-				pass
-			 
-			#print 'TLS : %x' % sh.version			
+            try:
+                handshake = dpkt.ssl.TLSHandshake(record.data)
+            except dpkt.ssl.SSL3Exception, e:
+                continue
+            except dpkt.dpkt.NeedData, e:
+                continue
 
-			#if sh.version == dpkt.ssl.SSL3_V:
-			#elif sh.version == dpkt.ssl.TLS1_V:
-			#elif sh.version == dpkt.ssl.TLS11_V:
-			#elif sh.version == dpkt.ssl.TLS12_V:
+            hd = handshake.data
+            #print "Handshake Protocol: 0x%02x 0x%02x" % (record.type, hdtype)
+            if hdtype == 1:
+                if not isinstance(hd, dpkt.ssl.TLSClientHello):
+                    continue
+                # Use version from client Hello for now
+                sslinfo['Version'] = '%04x' % record.version    
+                if  len(hd.session_id) > 0:
+                    sslinfo['C_SID'] = 'y'
+            elif hdtype == 2: 
+                if not isinstance(hd, dpkt.ssl.TLSServerHello):
+                    continue
+                if  len(hd.session_id) > 0:
+                    sslinfo['S_SID'] = 'y'
+                sslinfo['CipherSuite'] = ('%04x' % hd.cipher_suite)
+            elif hdtype == 11: 
+                print "type"
+                if not isinstance(hd, dpkt.ssl.TLSCertificate):
+                    continue
+                import M2Crypto
+                searial = hd.certs[0].get_searial_number()
+                #signalg = hd.certs[0].get_signature_algorithm()
+                print "serial number: " + searial
+                #print "signature algorithm: " + signalg
+            else:    
+                print "Unknown Handshake Protocol: %d" % hdtype
+                pass
+             
+            #print 'TLS : %x' % sh.version            
 
-			#if len(sh.session_id) > 0:
-			#print 'CipherSuite=%x' % sh.cipher_suite
+            #if sh.version == dpkt.ssl.SSL3_V:
+            #elif sh.version == dpkt.ssl.TLS1_V:
+            #elif sh.version == dpkt.ssl.TLS11_V:
+            #elif sh.version == dpkt.ssl.TLS12_V:
 
-	sslinfo['Records'] = msgord	
-	return sslinfo
+            #if len(sh.session_id) > 0:
+            #print 'CipherSuite=%x' % sh.cipher_suite
+
+    sslinfo['Records'] = msgord    
+    return sslinfo
 
 def main(argv):
-	if len(argv) != 2:
-		print "SSL information extractor:"
-		print "	Usage: PROG <PCAP file>"	
-		print ""
-		sys.exit(1)
-	
-	with open(argv[1], 'rb') as fp:
-		pcap = pcap_reader(fp)
-		stat = extract_info(pcap)
-	
-	print stat
-	
+    if len(argv) != 2:
+        print "SSL information extractor:"
+        print "    Usage: PROG <PCAP file>"    
+        print ""
+        sys.exit(1)
+    
+    with open(argv[1], 'rb') as fp:
+        pcap = pcap_reader(fp)
+        stat = extract_info(pcap)
+    
+    print stat
+    
 if __name__ == "__main__":
-	main(sys.argv)
+    main(sys.argv)
