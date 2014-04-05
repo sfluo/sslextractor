@@ -16,6 +16,7 @@
 #
 
 import os, sys
+import pickle
 
 p = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'dpkt-1.8')
 if p not in sys.path:
@@ -23,7 +24,12 @@ if p not in sys.path:
 
 import dpkt
 
-
+def pcap_extractor(filename):
+    with open(filename, 'rb') as fp:
+        pcap = pcap_reader(fp)
+        stat = extract_info(pcap)
+    return stat
+    
 def pcap_reader(fp):
     return dpkt.pcap.Reader(fp)
 
@@ -34,8 +40,8 @@ def extract_info(pcap):
     """    
 
     msgord=[]
-    sslinfo = {'Version':0, 'C_SID': 'n', 'S_SID': 'n', \
-                'CipherSuite': 0x0000, 'Certs': [], 'Records': []} 
+    sslinfo = {'Version':0, 'C_SID': 'n', 'S_SID': 'n',  \
+                 'CipherSuite': 0x0000, 'SrvCert': '', 'Records': [], 'Complete': 'n'} 
 
     for ts, frame in pcap:
         eth = dpkt.ethernet.Ethernet(frame)
@@ -73,6 +79,7 @@ def extract_info(pcap):
 
         for record in records:
 
+
             if record.type == 20 or record.type == 21:
                 msgord.append(record.type)
                 msgord.append(0)
@@ -80,11 +87,12 @@ def extract_info(pcap):
             
             # We mainly focus on TLSHandshake
             if record.type != 22:
-                print "Record: %d" % record.type
+                #print "Record: %d" % record.type
                 continue;    
 
             if len(record.data) == 0:
                 continue
+            #print "Record length: %x" % record.length
 
             hdtype = ord(record.data[0])
 
@@ -97,7 +105,7 @@ def extract_info(pcap):
                 continue
             except dpkt.dpkt.NeedData, e:
                 continue
-
+ 
             hd = handshake.data
             #print "Handshake Protocol: 0x%02x 0x%02x" % (record.type, hdtype)
             if hdtype == 1:
@@ -113,28 +121,30 @@ def extract_info(pcap):
                 if  len(hd.session_id) > 0:
                     sslinfo['S_SID'] = 'y'
                 sslinfo['CipherSuite'] = ('%04x' % hd.cipher_suite)
-            elif hdtype == 11: 
-                print "type"
+            elif hdtype == 11:  # TLSCertificate
                 if not isinstance(hd, dpkt.ssl.TLSCertificate):
                     continue
-                import M2Crypto
-                searial = hd.certs[0].get_searial_number()
-                #signalg = hd.certs[0].get_signature_algorithm()
-                print "serial number: " + searial
-                #print "signature algorithm: " + signalg
-            else:    
-                print "Unknown Handshake Protocol: %d" % hdtype
+
+                certs=[]
+                for i in range(len(hd.certs)):
+                       cert={}
+                       cert['keytype'] = hd.certs[i].get_pubkey().type()
+                       cert['Keybits'] = hd.certs[i].get_pubkey().bits()
+                       cert['Signalg'] = hd.certs[i].get_signature_algorithm()
+                       certs.append(cert)
+                sslinfo['SrvCert'] = certs
+            elif hdtype == 12:  # TLSServerkex
+                if not isinstance(hd, dpkt.ssl.TLSServerKeyExchange):
+                    continue
+
+                dhsp = dpkt.ssl.getDHEServerParams(hd.data, record.version, dpkt.ssl.TLS_KEX_DHE)
+                sslinfo['srv_kex'] = ['%d'% dhsp.p_len, '%d'% dhsp.g_len, '%d' % dhsp.pubkey_len,'%d'% dhsp.signature_len]
+            elif hdtype == 14: # ServerHelloDone 
+                sslinfo['Complete'] = 'y'
+                continue;
+            else:
+                #print "Unknown Handshake Protocol: %d" % hdtype
                 pass
-             
-            #print 'TLS : %x' % sh.version            
-
-            #if sh.version == dpkt.ssl.SSL3_V:
-            #elif sh.version == dpkt.ssl.TLS1_V:
-            #elif sh.version == dpkt.ssl.TLS11_V:
-            #elif sh.version == dpkt.ssl.TLS12_V:
-
-            #if len(sh.session_id) > 0:
-            #print 'CipherSuite=%x' % sh.cipher_suite
 
     sslinfo['Records'] = msgord    
     return sslinfo
@@ -146,11 +156,17 @@ def main(argv):
         print ""
         sys.exit(1)
     
-    with open(argv[1], 'rb') as fp:
-        pcap = pcap_reader(fp)
-        stat = extract_info(pcap)
-    
-    print stat
-    
+    import glob
+    files = glob.glob(argv[1]+"/*.pcap")
+    print files
+    stats=[]
+    for f in files:
+        st = pcap_extractor(f)
+        stats.append(st)
+    pickle.dump(stats, open('sslinfo.dump', 'wb'))
+    print "----------------"
+    reader=pickle.load(open('sslinfo.dump', 'rb'))
+    print reader
+
 if __name__ == "__main__":
     main(sys.argv)

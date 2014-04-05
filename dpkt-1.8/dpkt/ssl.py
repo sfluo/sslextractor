@@ -281,35 +281,124 @@ class TLSCertificate(dpkt.Packet):
             self.num_certs = 0
             self.certs=[]
             consumed = 0
-            while (consumed < self.certs_len):
+            while (consumed < self.length):
                 cert_len = struct.unpack('!I', '\x00' + self.data[consumed:consumed+3])[0]
                 asn1cert = self.data[consumed+3:consumed+3+cert_len]
                 #print dpkt.hexdump(asn1cert)
                 #asn1cert = struct.unpack('<s', self.data[consumed+3:consumed+cert_len])
                 #print dpkt.hexdump(asn1cert)
-                #x509cert=OpenSSL.crypto.load_certificate(OpenSSL.crypto.FILETYPE_ASN1, asn1cert)
-                #self.certs.append(x509cert)
-                import M2Crypto
-                cert = M2Crypto.X509.load_cert_string(asn1cert, format=M2Crypto.X509.FORMAT_DER)
-                self.certs.append( cert )
-                consumed = consumed + 3 + cert_len
+                x509cert=OpenSSL.crypto.load_certificate(OpenSSL.crypto.FILETYPE_ASN1, asn1cert)
+                self.certs.append(x509cert)
+                #import M2Crypto
+                #cert = M2Crypto.X509.load_cert_string(asn1cert, format=M2Crypto.X509.FORMAT_DER)
+                #self.certs.append( cert )
+                consumed += 3 + cert_len
                 self.num_certs+=1      
-                print "Cert %d, %d" % (self.num_certs, cert_len)
+        except struct.error:
+            raise dpkt.NeedData
+
+    @property
+    def length(self):
+        return struct.unpack('!I', '\x00' + self.certs_len)[0]
+
+TLS_KEX_NULL = 0
+TLS_KEX_DHE = 1
+TLS_KEX_DH = 2
+TLS_KEX_RSA = 3
+TLS_KEX_RSA_EXPORT = 4
+TLS_KEX_FORTEZZA = 5
+TLS_KEX_KRB5 = 6
+TLS_KEX_KRB5_EXPORT = 7
+TLS_KEX_PSK = 8
+TLS_KEX_GOSTR341094 = 9
+TLS_KEX_ECDHE = 10
+TLS_KEX_ECDHE = 11
+TLS_KEX_SRP = 12
+#TLS_KEX_RSA_FIPS = 13
+
+def getDHEServerParams(data, tlsver, cipher):
+    dhe = TLSServerKeyExchangeParams()
+    try:
+        if cipher == TLS_KEX_DHE:
+            dhe.p_len = struct.unpack('!H', data[0:2])[0]
+            #print "p_len=%d" % dhe.p_len
+            dhe.p = struct.unpack('%ds' % dhe.p_len, data[2:2+dhe.p_len])
+            offset = 2 + dhe.p_len 
+
+            dhe.g_len = struct.unpack('!H', data[offset:offset+2])[0]
+            #print "g_len=%d" % dhe.g_len
+            dhe.g = struct.unpack('%ds' % dhe.g_len, data[offset+2:offset+2+dhe.g_len])
+            offset = offset + 2 + dhe.g_len
+
+            dhe.pubkey_len = struct.unpack('!H', data[offset:offset+2])[0]
+            #print "pubkey_len =%d" % dhe.pubkey_len
+            dhe.pubkey = struct.unpack('%ds' % dhe.pubkey_len, data[offset+2:offset+2+dhe.pubkey_len])
+            offset = offset + 2 + dhe.pubkey_len
+
+            if tlsver == TLS12_V:
+                dhe.signature_alg = struct.unpack('!H', data[offset:offset+2])[0]
+                offset = offset + 2
+            dhe.signature_len = struct.unpack('!H', data[offset:offset+2])[0]
+            #print "sig_len=%d" % dhe.signature_len
+            dhe.signature = struct.unpack('%ds' % dhe.signature_len, data[offset+2:offset+2+dhe.signature_len])
+    except struct.error:
+        raise dpt.NeedData
+
+    return dhe
+
+
+class TLSServerKeyExchangeParams(object):
+    pass
+
+class TLSServerKeyExchange(dpkt.Packet):
+    __hdr__ = tuple()
+    def unpack(self, buf):
+        try:
+            dpkt.Packet.unpack(self, buf)
+        except struct.error:
+            raise dpkt.NeedData
+
+class TLSDHClientParams(dpkt.Packet):
+    __hdr__ = (
+        ('params_len', '3s', 0),
+    )
+    def unpack(self, buf):
+        try:
+            dpkt.Packet.unpack(self, buf)
+            self.pubkey_len = self.length
+            self.pubkey = struct.unpack('%ds' % self.length, self.data)
         except struct.error:
             raise dpkt.NeedData
     @property
     def length(self):
-        return struct.unpack('!I', '\x00' + self.certs_len)[0]
+        return struct.unpack('!I', '\x00' + self.params_len)[0]
+    
+          
+class TLSClientKeyExchange(dpkt.Packet):
+    __hdr__ = (
+        ('params_len', '3s', 0),
+    )
+
+    def unpack(self, buf):
+        try:
+            dpkt.Packet.unpack(self, buf)
+        except struct.error:
+            raise dpkt.NeedData
+
+    @property
+    def length(self):
+        return struct.unpack('!I', '\x00' + self.params_len)[0]
+    
 
 class TLSUnknownHandshake(dpkt.Packet):
     __hdr__ = tuple()
 
 #TLSCertificate = TLSUnknownHandshake
-TLSServerKeyExchange = TLSUnknownHandshake
+#TLSServerKeyExchange = TLSUnknownHandshake
 TLSCertificateRequest = TLSUnknownHandshake
 TLSServerHelloDone = TLSUnknownHandshake
 TLSCertificateVerify = TLSUnknownHandshake
-TLSClientKeyExchange = TLSUnknownHandshake
+#TLSClientKeyExchange = TLSUnknownHandshake
 TLSFinished = TLSUnknownHandshake
 
 
